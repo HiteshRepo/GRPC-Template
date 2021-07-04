@@ -6,6 +6,7 @@ import (
 	"github.com/HiteshRepo/grpc-go-course/greet/greetpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"io"
 	"log"
@@ -14,19 +15,35 @@ import (
 
 func main()  {
 	fmt.Println("Hello I'm client")
-	cc, err := grpc.Dial("localhost:50051", grpc.WithInsecure())
+
+	// tls is false, because of an error in client side :
+	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
+	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
+	tls := false
+	opts := grpc.WithInsecure()
+	if tls {
+		certFile := "ssl/ca.crt"
+		creds, sslErr := credentials.NewClientTLSFromFile(certFile, "")
+		if sslErr != nil {
+			log.Fatalf("Failed to loading ca trust certificates: %v", sslErr)
+			return
+		}
+		opts = grpc.WithTransportCredentials(creds)
+	}
+
+	cc, err := grpc.Dial("localhost:50051", opts)
 	if err != nil {
 		log.Fatalf("could not connect: %v", err)
 	}
 
 	defer cc.Close()
 	c := greetpb.NewGreetServiceClient(cc)
-	//doUnary(c)
+	doUnary(c)
 	//doServerStreaming(c)
 	//doClientStreaming(c)
 	//doBidiStreaming(c)
-	doUnaryWithDeadline(c, 5*time.Second) //should complete - server timeout 3s
-	doUnaryWithDeadline(c, 1*time.Second) //should timeout - server timeout 3s
+	//doUnaryWithDeadline(c, 5*time.Second) //should complete - server timeout 3s
+	//doUnaryWithDeadline(c, 1*time.Second) //should timeout - server timeout 3s
 }
 
 func doUnary(c greetpb.GreetServiceClient) {
