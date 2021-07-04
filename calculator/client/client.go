@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/HiteshRepo/grpc-go-course/calculator/calculatorpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"io"
 	"log"
@@ -14,7 +15,23 @@ import (
 
 func main()  {
 	fmt.Println("Hello I'm client")
-	cc, err := grpc.Dial("localhost:50052", grpc.WithInsecure())
+
+	// tls is false, because of an error in client side :
+	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
+	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
+	tls := false
+	opts := grpc.WithInsecure()
+	if tls {
+		certFile := "ssl/ca.crt"
+		creds, sslErr := credentials.NewClientTLSFromFile(certFile, "")
+		if sslErr != nil {
+			log.Fatalf("Failed to loading ca trust certificates: %v", sslErr)
+			return
+		}
+		opts = grpc.WithTransportCredentials(creds)
+	}
+
+	cc, err := grpc.Dial("localhost:50052", opts)
 	if err != nil {
 		log.Fatalf("could not connect: %v", err)
 	}
