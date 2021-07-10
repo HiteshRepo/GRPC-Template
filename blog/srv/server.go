@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/HiteshRepo/grpc-go-course/blog/blogpb"
+	"github.com/HiteshRepo/grpc-go-course/blog/constants"
+	"github.com/HiteshRepo/grpc-go-course/blog/logger"
+	"github.com/HiteshRepo/grpc-go-course/blog/middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -18,6 +22,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 )
 
@@ -251,7 +256,11 @@ func main(){
 	defer cancel()
 
 	log.Println("connecting to mongodb")
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb+srv://Hitesh1103:mzlRpnSLJmtFHCss@practicecluster-7ie7c.mongodb.net/test?retryWrites=true&w=majority"))
+	mongoUri := constants.MONGO_URI
+	if len(os.Getenv("MONGO_URI")) > 0 {
+		mongoUri = os.Getenv("MONGO_URI")
+	}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUri))
 	defer func() {
 		log.Println("closing mongodb connection")
 		if err = client.Disconnect(ctx); err != nil {
@@ -259,11 +268,23 @@ func main(){
 		}
 	}()
 
-	collection = client.Database("blog-grpc").Collection("blogs")
+	dbName := constants.DB_NAME
+	dbCollection := constants.DB_COLLECTION
+	if len(os.Getenv("DB_NAME")) > 0 {
+		dbName = os.Getenv("DB_NAME")
+	}
+	if len(os.Getenv("DB_COLLECTION")) > 0 {
+		dbCollection = os.Getenv("DB_COLLECTION")
+	}
+	collection = client.Database(dbName).Collection(dbCollection)
 
 	log.Println("Blog service is starting")
 
-	lis,err := net.Listen("tcp", "0.0.0.0:50053")
+	servAddr := constants.GRPC_SRV_ADDR
+	if len(os.Getenv("GRPC_SRV_ADDR")) > 0 {
+		servAddr = os.Getenv("GRPC_SRV_ADDR")
+	}
+	lis,err := net.Listen("tcp", servAddr)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -272,10 +293,22 @@ func main(){
 	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
 	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
 	opts := []grpc.ServerOption{}
-	tls := false
+	tlsOrNot := constants.TLS
+	if len(os.Getenv("TLS")) > 0 {
+		tlsOrNot = os.Getenv("TLS")
+	}
+	tls, _ := strconv.ParseBool(tlsOrNot)
 	if tls {
-		certFile := "ssl/server.crt"
-		keyFile := "ssl/server.pem"
+		certFilePath := constants.SSL_CERT_PATH
+		keyFilePath := constants.SSL_KEY_PATH
+		if len(os.Getenv("SSL_CERT_PATH")) > 0 {
+			certFilePath = os.Getenv("SSL_CERT_PATH")
+		}
+		if len(os.Getenv("SSL_KEY_PATH")) > 0 {
+			keyFilePath = os.Getenv("SSL_KEY_PATH")
+		}
+		certFile := certFilePath
+		keyFile := keyFilePath
 		creds, sslErr := credentials.NewServerTLSFromFile(certFile, keyFile)
 		if sslErr != nil {
 			log.Fatalf("Failed to load certificates: %v", sslErr)
@@ -284,11 +317,19 @@ func main(){
 
 		opts = append(opts, grpc.Creds(creds))
 	}
-
+	opts = append(opts, middleware.GetGrpcMiddlewareOpts()...)
 	s := grpc.NewServer(opts...)
 	blogpb.RegisterBlogServiceServer(s, &server{collection: collection})
+
+	if err := logger.Init(-1, "2006-01-02T15:04:05Z07:00"); err != nil {
+		panic("failed to initialize logger: " + err.Error())
+	}
+
 	// Register reflection service on gRPC server.
 	reflection.Register(s)
+
+	grpc_prometheus.Register(s)
+	middleware.RunPrometheusServer()
 
 	go func() {
 		log.Println("starting listener")

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/HiteshRepo/grpc-go-course/greet/constants"
 	"github.com/HiteshRepo/grpc-go-course/greet/greetpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -10,19 +11,29 @@ import (
 	"google.golang.org/grpc/status"
 	"io"
 	"log"
+	"os"
+	"strconv"
 	"time"
 )
 
 func main()  {
-	fmt.Println("Hello I'm client")
+	fmt.Println("Starting greet client")
 
 	// tls is false, because of an error in client side :
 	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
 	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
-	tls := false
+	tlsOrNot := constants.TLS
+	if len(os.Getenv("TLS")) > 0 {
+		tlsOrNot = os.Getenv("TLS")
+	}
+	tls, _ := strconv.ParseBool(tlsOrNot)
 	opts := grpc.WithInsecure()
 	if tls {
-		certFile := "ssl/ca.crt"
+		certFilePath := constants.SSL_CA_CERT_PATH
+		if len(os.Getenv("SSL_CA_CERT_PATH")) > 0 {
+			certFilePath = os.Getenv("SSL_CA_CERT_PATH")
+		}
+		certFile := certFilePath
 		creds, sslErr := credentials.NewClientTLSFromFile(certFile, "")
 		if sslErr != nil {
 			log.Fatalf("Failed to loading ca trust certificates: %v", sslErr)
@@ -31,17 +42,21 @@ func main()  {
 		opts = grpc.WithTransportCredentials(creds)
 	}
 
-	cc, err := grpc.Dial("localhost:50051", opts)
+	servAddr := constants.GRPC_SRV_ADDR
+	if len(os.Getenv("GRPC_SRV_ADDR")) > 0 {
+		servAddr = os.Getenv("GRPC_SRV_ADDR")
+	}
+	cc, err := grpc.Dial(servAddr, opts)
 	if err != nil {
 		log.Fatalf("could not connect: %v", err)
 	}
 
 	defer cc.Close()
 	c := greetpb.NewGreetServiceClient(cc)
-	doUnary(c)
+	//doUnary(c)
 	//doServerStreaming(c)
 	//doClientStreaming(c)
-	//doBidiStreaming(c)
+	doBidiStreaming(c)
 	//doUnaryWithDeadline(c, 5*time.Second) //should complete - server timeout 3s
 	//doUnaryWithDeadline(c, 1*time.Second) //should timeout - server timeout 3s
 }
