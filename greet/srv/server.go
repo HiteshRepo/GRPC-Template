@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/HiteshRepo/grpc-go-course/greet/constants"
 	"github.com/HiteshRepo/grpc-go-course/greet/greetpb"
+	"github.com/HiteshRepo/grpc-go-course/greet/logger"
+	"github.com/HiteshRepo/grpc-go-course/greet/middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -12,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"time"
 )
@@ -78,6 +83,7 @@ func (*server) GreetEveryone(stream greetpb.GreetService_GreetEveryoneServer) er
 		firstName := req.GetGreeting().GetFirstName()
 		lastName := req.GetGreeting().GetLastName()
 		result := fmt.Sprintf("Hello, %s %s ", firstName, lastName)
+		time.Sleep(2000 * time.Millisecond)
 		err = stream.Send(&greetpb.GreetEveryoneResponse{Result: result})
 		if err != nil {
 			log.Fatalf("Error while sending to client: %v", err)
@@ -105,9 +111,13 @@ func (*server) GreetWithDeadline(ctx context.Context, req *greetpb.GreetingWithD
 }
 
 func main(){
-	fmt.Println("Hello I'm server")
+	fmt.Println("Starting greet server")
 
-	lis,err := net.Listen("tcp", "0.0.0.0:50051")
+	servAddr := constants.GRPC_SRV_ADDR
+	if len(os.Getenv("GRPC_SRV_ADDR")) > 0 {
+		servAddr = os.Getenv("GRPC_SRV_ADDR")
+	}
+	lis,err := net.Listen("tcp", servAddr)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -116,10 +126,22 @@ func main(){
 	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
 	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
 	opts := []grpc.ServerOption{}
-	tls := false
+	tlsOrNot := constants.TLS
+	if len(os.Getenv("TLS")) > 0 {
+		tlsOrNot = os.Getenv("TLS")
+	}
+	tls, _ := strconv.ParseBool(tlsOrNot)
 	if tls {
-		certFile := "ssl/server.crt"
-		keyFile := "ssl/server.pem"
+		certFilePath := constants.SSL_CERT_PATH
+		keyFilePath := constants.SSL_KEY_PATH
+		if len(os.Getenv("SSL_CERT_PATH")) > 0 {
+			certFilePath = os.Getenv("SSL_CERT_PATH")
+		}
+		if len(os.Getenv("SSL_KEY_PATH")) > 0 {
+			keyFilePath = os.Getenv("SSL_KEY_PATH")
+		}
+		certFile := certFilePath
+		keyFile := keyFilePath
 		creds, sslErr := credentials.NewServerTLSFromFile(certFile, keyFile)
 		if sslErr != nil {
 			log.Fatalf("Failed to load certificates: %v", sslErr)
@@ -128,11 +150,20 @@ func main(){
 
 		opts = append(opts, grpc.Creds(creds))
 	}
-
+	opts = append(opts, middleware.GetGrpcMiddlewareOpts()...)
 	s := grpc.NewServer(opts...)
 	greetpb.RegisterGreetServiceServer(s, &server{})
+
+	if err := logger.Init(-1, "2006-01-02T15:04:05Z07:00"); err != nil {
+		panic("failed to initialize logger: " + err.Error())
+	}
+
 	// Register reflection service on gRPC server.
 	reflection.Register(s)
+
+	grpc_prometheus.Register(s)
+	middleware.RunPrometheusServer()
+
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v",err)
 	}

@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/HiteshRepo/grpc-go-course/calculator/calculatorpb"
+	"github.com/HiteshRepo/grpc-go-course/calculator/constants"
+	"github.com/HiteshRepo/grpc-go-course/calculator/logger"
+	"github.com/HiteshRepo/grpc-go-course/calculator/middleware"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -13,6 +17,8 @@ import (
 	"log"
 	"math"
 	"net"
+	"os"
+	"strconv"
 )
 
 type server struct {
@@ -107,7 +113,13 @@ func (*server) SquareRoot(ctx context.Context, req *calculatorpb.SquareRootReque
 }
 
 func main(){
-	lis,err := net.Listen("tcp", "0.0.0.0:50052")
+	log.Println("Starting calculator server")
+
+	servAddr := constants.GRPC_SRV_ADDR
+	if len(os.Getenv("GRPC_SRV_ADDR")) > 0 {
+		servAddr = os.Getenv("GRPC_SRV_ADDR")
+	}
+	lis,err := net.Listen("tcp", servAddr)
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -116,10 +128,22 @@ func main(){
 	// connection error: desc = "transport: authentication handshake failed: x509: certificate relies
 	// on legacy Common Name field, use SANs or temporarily enable Common Name matching with GODEBUG=x509ignoreCN=0"
 	opts := []grpc.ServerOption{}
-	tls := false
+	tlsOrNot := constants.TLS
+	if len(os.Getenv("TLS")) > 0 {
+		tlsOrNot = os.Getenv("TLS")
+	}
+	tls, _ := strconv.ParseBool(tlsOrNot)
 	if tls {
-		certFile := "ssl/server.crt"
-		keyFile := "ssl/server.pem"
+		certFilePath := constants.SSL_CERT_PATH
+		keyFilePath := constants.SSL_KEY_PATH
+		if len(os.Getenv("SSL_CERT_PATH")) > 0 {
+			certFilePath = os.Getenv("SSL_CERT_PATH")
+		}
+		if len(os.Getenv("SSL_KEY_PATH")) > 0 {
+			keyFilePath = os.Getenv("SSL_KEY_PATH")
+		}
+		certFile := certFilePath
+		keyFile := keyFilePath
 		creds, sslErr := credentials.NewServerTLSFromFile(certFile, keyFile)
 		if sslErr != nil {
 			log.Fatalf("Failed to load certificates: %v", sslErr)
@@ -128,11 +152,20 @@ func main(){
 
 		opts = append(opts, grpc.Creds(creds))
 	}
-
+	opts = append(opts, middleware.GetGrpcMiddlewareOpts()...)
 	s := grpc.NewServer(opts...)
 	calculatorpb.RegisterCalculatorServiceServer(s, &server{})
+
+	if err := logger.Init(-1, "2006-01-02T15:04:05Z07:00"); err != nil {
+		panic("failed to initialize logger: " + err.Error())
+	}
+
 	// Register reflection service on gRPC server.
 	reflection.Register(s)
+
+	grpc_prometheus.Register(s)
+	middleware.RunPrometheusServer()
+
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve: %v",err)
 	}
